@@ -11,6 +11,17 @@ enum class Side {
 
 class Order {
 public:
+    static int64_t activeAllocations;
+    void* operator new(size_t size) {
+        activeAllocations++;
+        return ::operator new(size);
+    }
+    void operator delete(void* ptr) noexcept {
+        if (ptr) {
+            activeAllocations--;
+            ::operator delete(ptr);
+        }
+    }
 
     uint64_t id;
 
@@ -26,4 +37,6 @@ public:
     Order* next = nullptr;
 
     PriceLevel* priceLevel = nullptr;
+
+    bool isStrategyOrder = false;
 };

@@ -31,6 +31,8 @@ public:
 
     void printOrdersAtPrice(int price, Side side);
 
+    void clearMarketOrders();
+
     // helper functions for matching engine
 
     bool hasBids() const;

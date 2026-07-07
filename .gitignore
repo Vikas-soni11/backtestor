@@ -1,0 +1,27 @@
+# Compiler outputs and binaries
+*.exe
+*.o
+*.obj
+*.out
+*.app
+*.dSYM/
+test_runner
+test_runner_debug
+
+# IDE and Project files
+.vscode/
+.idea/
+*.suo
+*.user
+*.userossc
+*.sln
+*.vcxproj
+*.filters
+
+# Temporary backtester test output files
+temp_market_data.csv
+temp_trade_data.csv
+
+# OS generated files
+.DS_Store
+Thumbs.db

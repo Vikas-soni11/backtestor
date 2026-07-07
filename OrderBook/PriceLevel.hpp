@@ -4,6 +4,17 @@
 
 class PriceLevel {
 public:
+    static int64_t activeAllocations;
+    void* operator new(size_t size) {
+        activeAllocations++;
+        return ::operator new(size);
+    }
+    void operator delete(void* ptr) noexcept {
+        if (ptr) {
+            activeAllocations--;
+            ::operator delete(ptr);
+        }
+    }
 
     int price;
 
@@ -15,5 +26,16 @@ public:
     PriceLevel(int p)
         : price(p)
     {
+    }
+
+    ~PriceLevel()
+    {
+        Order* curr = head;
+        while(curr != nullptr)
+        {
+            Order* next = curr->next;
+            delete curr;
+            curr = next;
+        }
     }
 };
