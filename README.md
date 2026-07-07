@@ -1,4 +1,4 @@
-# HFT-Grade C++ Backtester & Matching Engine
+C++ Backtester & Matching Engine
 
 A high-performance, low-latency, and multi-threaded backtesting simulation suite built in C++17. Designed to simulate and evaluate quantitative trading strategies using historical order book snapshots and trade logs (compatible with IMC Prosperity market data format).
 
