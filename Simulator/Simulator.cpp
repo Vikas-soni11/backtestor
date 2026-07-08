@@ -19,17 +19,25 @@ void Simulator::processTrades(const std::vector<Trade>& trades) {
                 position += qty;
                 avgEntryPrice = totalCost / position;
             } else {
-                // Covering a short position (closer to zero)
+                // Covering a short position. First, close as much short as possible.
                 int closedQty = std::min(qty, -position);
                 double tradePnL = closedQty * (avgEntryPrice - price);
                 completedTradePnLs.push_back(tradePnL);
                 
-                position += qty;
+                position += closedQty;
+                qty -= closedQty;
+                
                 if (position == 0) {
                     avgEntryPrice = 0.0;
                 }
+                
+                // If there is still quantity left, open a new long position
+                if (qty > 0) {
+                    position = qty;
+                    avgEntryPrice = price;
+                }
             }
-            cash -= (qty * price);
+            cash -= (trade.quantity * price); // Deduct total cash spent
             strategyTrades.push_back(trade);
         }
         else if (isSell) {
@@ -39,17 +47,25 @@ void Simulator::processTrades(const std::vector<Trade>& trades) {
                 position -= qty;
                 avgEntryPrice = totalCost / (-position);
             } else {
-                // Selling out of a long position (closer to zero)
+                // Selling out of a long position. First, close as much long as possible.
                 int closedQty = std::min(qty, position);
                 double tradePnL = closedQty * (price - avgEntryPrice);
                 completedTradePnLs.push_back(tradePnL);
                 
-                position -= qty;
+                position -= closedQty;
+                qty -= closedQty;
+                
                 if (position == 0) {
                     avgEntryPrice = 0.0;
                 }
+                
+                // If there is still quantity left, open a new short position
+                if (qty > 0) {
+                    position = -qty;
+                    avgEntryPrice = price;
+                }
             }
-            cash += (qty * price);
+            cash += (trade.quantity * price); // Add total cash received
             strategyTrades.push_back(trade);
         }
     }

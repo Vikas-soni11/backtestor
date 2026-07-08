@@ -269,9 +269,10 @@ private:
     uint64_t restingOrderId = 0;
     int buyThreshold;
     int sellThreshold;
+    bool silent;
 public:
-    DummyStrategy(Simulator* sim, int buyThresh = 11000, int sellThresh = 12000) 
-        : Strategy(sim), buyThreshold(buyThresh), sellThreshold(sellThresh) {}
+    DummyStrategy(Simulator* sim, int buyThresh = 11000, int sellThresh = 12000, bool silentMode = false) 
+        : Strategy(sim), buyThreshold(buyThresh), sellThreshold(sellThresh), silent(silentMode) {}
 
     void onDepthUpdate(const BookSnapshot& snapshot) override {
         // Place a resting order at t=0
@@ -286,7 +287,7 @@ public:
 
         // Cancel the resting order at t=100
         if (snapshot.timestamp == 100 && restingOrderId > 0) {
-            std::cout << "[Strategy] Cancelling resting order " << restingOrderId << "\n";
+            if (!silent) std::cout << "[Strategy] Cancelling resting order " << restingOrderId << "\n";
             simulator->cancelStrategyOrder(restingOrderId);
             
             // Verify it was removed
@@ -296,18 +297,18 @@ public:
 
         // Buy if askPrice1 < buyThreshold and position is 0
         if (snapshot.askPrice1 > 0 && snapshot.askPrice1 < buyThreshold && simulator->getPosition() == 0) {
-            std::cout << "[Strategy] BUY trigger: placing order at ask price " << snapshot.askPrice1 << "\n";
+            if (!silent) std::cout << "[Strategy] BUY trigger: placing order at ask price " << snapshot.askPrice1 << "\n";
             simulator->submitStrategyOrder(Side::BUY, 20000, 5); // Place BUY of 5 at high limit
         }
         // Sell if bidPrice1 > sellThreshold and position > 0
         if (snapshot.bidPrice1 > 0 && snapshot.bidPrice1 > sellThreshold && simulator->getPosition() > 0) {
-            std::cout << "[Strategy] SELL trigger: placing order at bid price " << snapshot.bidPrice1 << "\n";
+            if (!silent) std::cout << "[Strategy] SELL trigger: placing order at bid price " << snapshot.bidPrice1 << "\n";
             simulator->submitStrategyOrder(Side::SELL, 1, 5); // Place SELL of 5 at low limit
         }
     }
 
     void onMarketTrade(const HistoricalTrade& trade) override {
-        std::cout << "[Strategy] Observed market trade: " << trade.symbol << " qty " << trade.quantity << " at " << trade.price << "\n";
+        if (!silent) std::cout << "[Strategy] Observed market trade: " << trade.symbol << " qty " << trade.quantity << " at " << trade.price << "\n";
     }
 };
 
@@ -389,17 +390,17 @@ void test_parallel_backtests() {
         
         // Configuration 1: Standard thresholds (Wins $9980)
         factories.push_back({"Strat_Buy11k_Sell12k", [](Simulator* sim) {
-            return new DummyStrategy(sim, 11000, 12000);
+            return new DummyStrategy(sim, 11000, 12000, true);
         }});
 
         // Configuration 2: Too tight buy threshold (No trade, returns $0)
         factories.push_back({"Strat_Buy10k_Sell13k", [](Simulator* sim) {
-            return new DummyStrategy(sim, 10000, 13000);
+            return new DummyStrategy(sim, 10000, 13000, true);
         }});
 
         // Configuration 3: Alternative threshold (Wins $9980)
         factories.push_back({"Strat_Buy10k5_Sell12k", [](Simulator* sim) {
-            return new DummyStrategy(sim, 10500, 12000);
+            return new DummyStrategy(sim, 10500, 12000, true);
         }});
 
         // Configuration 4: Plain strategy function wrapped automatically (Wins $9980)
@@ -413,7 +414,16 @@ void test_parallel_backtests() {
         std::remove(mktPath.c_str());
         std::remove(trdPath.c_str());
     }
-    assert(activeAllocations == initialAlloc);
+    #undef activeAllocations
+    int64_t currentAlloc = Order::activeAllocations + PriceLevel::activeAllocations;
+    if (currentAlloc != initialAlloc) {
+        std::cout << "[ERROR] Leak in test_parallel_backtests! Initial: " << initialAlloc 
+                  << " Current: " << currentAlloc 
+                  << " Orders: " << Order::activeAllocations 
+                  << " Levels: " << PriceLevel::activeAllocations << "\n";
+    }
+    assert(currentAlloc == initialAlloc);
+    #define activeAllocations (Order::activeAllocations + PriceLevel::activeAllocations)
     std::cout << "test_parallel_backtests passed!\n";
 }
 
@@ -466,6 +476,151 @@ void test_matching_engine_benchmark() {
     std::cout << "test_matching_engine_benchmark passed!\n";
 }
 
+void create_large_mock_files(const std::string& mktPath, const std::string& trdPath, int rows) {
+    std::ofstream mktFile(mktPath);
+    mktFile << "day;timestamp;product;bid_price_1;bid_volume_1;bid_price_2;bid_volume_2;bid_price_3;bid_volume_3;ask_price_1;ask_volume_1;ask_price_2;ask_volume_2;ask_price_3;ask_volume_3;mid_price;profit_and_loss\n";
+    for (int i = 0; i < rows; ++i) {
+        mktFile << "0;" << (i * 100) << ";INTARIAN_PEPPER_ROOT;"
+                << (12000 + (i % 10)) << ";10;"
+                << (11990 + (i % 10)) << ";20;;"
+                << (12010 + (i % 10)) << ";15;"
+                << (12020 + (i % 10)) << ";25;;12000;0.0\n";
+    }
+    mktFile.close();
+
+    std::ofstream trdFile(trdPath);
+    trdFile << "timestamp;buyer;seller;symbol;currency;price;quantity\n";
+    for (int i = 0; i < rows / 10; ++i) {
+        trdFile << (i * 1000 + 50) << ";;;INTARIAN_PEPPER_ROOT;XIRECS;12000.0;5\n";
+    }
+    trdFile.close();
+}
+
+void test_concurrency_scaling() {
+    std::cout << "Running test_concurrency_scaling (Sequential vs Parallel backtests)...\n";
+    int64_t initialAlloc = activeAllocations;
+    {
+        std::string mktPath = "bench_market_data.csv";
+        std::string trdPath = "bench_trade_data.csv";
+        create_large_mock_files(mktPath, trdPath, 20000);
+
+        // Prepare 8 runs
+        std::vector<std::pair<std::string, StrategyFactory>> factories;
+        for (int i = 0; i < 8; ++i) {
+            factories.push_back({"Strat_" + std::to_string(i), [](Simulator* sim) {
+                return new DummyStrategy(sim, 11000, 12000, true);
+            }});
+        }
+
+        // 1. Sequential Execution
+        std::cout << "Running 8 backtests sequentially...\n";
+        auto startSeq = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < 8; ++i) {
+            Simulator sim;
+            Strategy* strat = factories[i].second(&sim);
+            sim.runBacktest(mktPath, trdPath, strat);
+            delete strat;
+        }
+        auto endSeq = std::chrono::high_resolution_clock::now();
+        double timeSeq = std::chrono::duration<double>(endSeq - startSeq).count();
+
+        // 2. Parallel Execution
+        std::cout << "Running 8 backtests in parallel...\n";
+        auto startPar = std::chrono::high_resolution_clock::now();
+        MultiBacktester::runParallelBacktests(mktPath, trdPath, factories, 12000);
+        auto endPar = std::chrono::high_resolution_clock::now();
+        double timePar = std::chrono::duration<double>(endPar - startPar).count();
+
+        double speedup = timeSeq / timePar;
+        double efficiency = (speedup / std::thread::hardware_concurrency()) * 100.0;
+
+        std::cout << "\n======================================\n";
+        std::cout << "     CONCURRENCY BENCHMARK RESULTS    \n";
+        std::cout << "======================================\n";
+        std::cout << "Total Backtests Evaluated: 8\n";
+        std::cout << "Available CPU Cores:       " << std::thread::hardware_concurrency() << "\n";
+        std::cout << "Sequential Time:           " << timeSeq << " seconds\n";
+        std::cout << "Parallel Time:             " << timePar << " seconds\n";
+        std::cout << "Speedup Factor:            " << speedup << "x faster\n";
+        std::cout << "Parallel Efficiency:       " << efficiency << "%\n";
+        std::cout << "======================================\n\n";
+
+        std::remove(mktPath.c_str());
+        std::remove(trdPath.c_str());
+    }
+    assert(activeAllocations == initialAlloc);
+    std::cout << "test_concurrency_scaling passed!\n";
+}
+
+class PositionFlipStrategy : public Strategy {
+public:
+    using Strategy::Strategy;
+    void onDepthUpdate(const BookSnapshot&) override {}
+    void onMarketTrade(const HistoricalTrade&) override {}
+};
+
+void test_position_flipping() {
+    std::cout << "Running test_position_flipping...\n";
+    int64_t initialAlloc = activeAllocations;
+    {
+        Simulator sim;
+        PositionFlipStrategy strat(&sim);
+        OrderBook& book = sim.getOrderBook();
+
+        // 1. Open a short position of -30 shares by selling 30 at 10000
+        Order* buyer = new Order();
+        buyer->id = 1;
+        buyer->side = Side::BUY;
+        buyer->price = 10000;
+        buyer->remainingQuantity = 100;
+        buyer->timestamp = 0;
+        buyer->isStrategyOrder = false;
+        
+        book.addOrder(buyer);
+        sim.submitStrategyOrder(Side::SELL, 10000, 30);
+        assert(sim.getPosition() == -30);
+
+        // 2. Buy 50 shares at 11000 (flips position from -30 to +20)
+        Order* seller = new Order();
+        seller->id = 2;
+        seller->side = Side::SELL;
+        seller->price = 11000;
+        seller->remainingQuantity = 100;
+        seller->timestamp = 0;
+        seller->isStrategyOrder = false;
+
+        book.addOrder(seller);
+        sim.submitStrategyOrder(Side::BUY, 11000, 50);
+        
+        assert(sim.getPosition() == 20);
+        // First 30 shares cover short at a loss of 30 * (10000 - 11000) = -30000
+        assert(sim.getCompletedTradePnLs().size() == 1);
+        assert(sim.getCompletedTradePnLs()[0] == -30000.0);
+
+        // 3. Sell 30 shares at 12000 (flips position from +20 to -10)
+        Order* buyer2 = new Order();
+        buyer2->id = 3;
+        buyer2->side = Side::BUY;
+        buyer2->price = 12000;
+        buyer2->remainingQuantity = 100;
+        buyer2->timestamp = 0;
+        buyer2->isStrategyOrder = false;
+
+        book.addOrder(buyer2);
+        sim.submitStrategyOrder(Side::SELL, 12000, 30);
+
+        assert(sim.getPosition() == -10);
+        // Sells out 20 longs at profit of 20 * (12000 - 11000) = +20000
+        assert(sim.getCompletedTradePnLs().size() == 2);
+        assert(sim.getCompletedTradePnLs()[1] == 20000.0);
+
+        // Clean up remaining market orders from the book to prevent leaks
+        book.clearMarketOrders();
+    }
+    assert(activeAllocations == initialAlloc);
+    std::cout << "test_position_flipping passed!\n";
+}
+
 int main() {
     std::cout << "======================================\n";
     std::cout << "Starting Matching Engine Test Suite\n";
@@ -481,6 +636,8 @@ int main() {
     test_strategy_simulation();
     test_parallel_backtests();
     test_matching_engine_benchmark();
+    test_concurrency_scaling();
+    test_position_flipping();
 
     std::cout << "======================================\n";
     std::cout << "All tests passed successfully! Zero leaks.\n";
