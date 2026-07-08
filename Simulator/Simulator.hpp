@@ -54,4 +54,10 @@ public:
     double getMaxDrawdownAbsolute() const { return maxDrawdownAbsolute; }
     double getMaxDrawdownPercent() const { return maxDrawdownPercent; }
     const std::vector<double>& getCompletedTradePnLs() const { return completedTradePnLs; }
+    
+    void setEnforceConstraints(bool enable) { enforceConstraints = enable; }
+    bool getEnforceConstraints() const { return enforceConstraints; }
+
+private:
+    bool enforceConstraints = false;
 };

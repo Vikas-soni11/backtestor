@@ -129,6 +129,21 @@ void Simulator::processSnapshot(const BookSnapshot& snapshot, Strategy* strategy
 }
 
 std::vector<Trade> Simulator::submitStrategyOrder(Side side, int price, int quantity) {
+    if (enforceConstraints) {
+        if (side == Side::BUY) {
+            double cost = static_cast<double>(price) * quantity;
+            if (cash < cost) {
+                std::cout << "[Simulator] [WARNING] BUY order rejected: Insufficient cash. Cash: " << cash << ", Cost: " << cost << "\n";
+                return {};
+            }
+        } else if (side == Side::SELL) {
+            if (position < quantity) {
+                std::cout << "[Simulator] [WARNING] SELL order rejected: Insufficient position. Position: " << position << ", Sell Qty: " << quantity << "\n";
+                return {};
+            }
+        }
+    }
+
     Order* o = new Order();
     o->id = nextStrategyOrderId++;
     o->side = side;

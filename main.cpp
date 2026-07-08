@@ -621,6 +621,48 @@ void test_position_flipping() {
     std::cout << "test_position_flipping passed!\n";
 }
 
+void test_simulator_constraints() {
+    std::cout << "Running test_simulator_constraints...\n";
+    int64_t initialAlloc = activeAllocations;
+    {
+        Simulator sim;
+        sim.setEnforceConstraints(true);
+        OrderBook& book = sim.getOrderBook();
+
+        // 1. Attempt to SELL when position is 0 -> should be rejected
+        auto trades1 = sim.submitStrategyOrder(Side::SELL, 10000, 5);
+        assert(trades1.empty());
+        assert(sim.getPosition() == 0);
+
+        // 2. Attempt to BUY costing more than cash (costs 5 * 25k = 125k, cash starts at 100k) -> should be rejected
+        auto trades2 = sim.submitStrategyOrder(Side::BUY, 25000, 5);
+        assert(trades2.empty());
+        assert(sim.getCash() == 100000.0);
+
+        // 3. Inject a market seller at 10000
+        Order* seller = new Order();
+        seller->id = 1;
+        seller->side = Side::SELL;
+        seller->price = 10000;
+        seller->remainingQuantity = 10;
+        seller->timestamp = 0;
+        seller->isStrategyOrder = false;
+        
+        book.addOrder(seller);
+
+        // Submit valid BUY of 5 at 10000 -> should succeed and fill
+        auto trades3 = sim.submitStrategyOrder(Side::BUY, 10000, 5);
+        assert(!trades3.empty());
+        assert(sim.getPosition() == 5);
+        assert(sim.getCash() == 50000.0);
+
+        // Clean up remaining market orders from the book to prevent leaks
+        book.clearMarketOrders();
+    }
+    assert(activeAllocations == initialAlloc);
+    std::cout << "test_simulator_constraints passed!\n";
+}
+
 int main() {
     std::cout << "======================================\n";
     std::cout << "Starting Matching Engine Test Suite\n";
@@ -638,6 +680,7 @@ int main() {
     test_matching_engine_benchmark();
     test_concurrency_scaling();
     test_position_flipping();
+    test_simulator_constraints();
 
     std::cout << "======================================\n";
     std::cout << "All tests passed successfully! Zero leaks.\n";
